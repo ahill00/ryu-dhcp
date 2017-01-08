@@ -17,18 +17,17 @@
 # a simple ICMP Echo Responder
 
 from ryu.base import app_manager
-from ryu.lib import addrconv
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-
-from ryu.ofproto import ofproto_v1_3
-
-from ryu.lib.packet import packet
+from ryu.lib import addrconv
+from ryu.lib.packet import dhcp
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ipv4
+from ryu.lib.packet import packet
 from ryu.lib.packet import udp
-from ryu.lib.packet import dhcp
+from ryu.ofproto import ofproto_v1_3
+
 
 class DHCPResponder(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -68,67 +67,81 @@ class DHCPResponder(app_manager.RyuApp):
         port = msg.match['in_port']
         pkt = packet.Packet(data=msg.data)
 
-        pkt_dhcp = dhcp.dhcp.parser(pkt[3])
+        pkt_dhcp = pkt.get_protocols(dhcp.dhcp)
         if not pkt_dhcp:
             return
         else:
             self._handle_dhcp(datapath, port, pkt)
         return
 
-
     def assemble_ack(self, pkt):
         req_eth = pkt.get_protocol(ethernet.ethernet)
         req_ipv4 = pkt.get_protocol(ipv4.ipv4)
         req_udp = pkt.get_protocol(udp.udp)
-        req = dhcp.dhcp.parser(pkt[3])
-        req[0].options.option_list.remove(next(opt for opt in req[0].options.option_list if opt.tag == 53))
-        req[0].options.option_list.insert(0, dhcp.option(tag=51, value='8640'))
-        req[0].options.option_list.insert(0, dhcp.option(tag=53, value='05'.decode('hex')))
+        req = pkt.get_protocol(dhcp.dhcp)
+        req.options.option_list.remove(
+            next(opt for opt in req.options.option_list if opt.tag == 53))
+        req.options.option_list.insert(0, dhcp.option(tag=51, value='8640'))
+        req.options.option_list.insert(
+            0, dhcp.option(tag=53, value='05'.decode('hex')))
 
         ack_pkt = packet.Packet()
-        ack_pkt.add_protocol(ethernet.ethernet(ethertype=req_eth.ethertype, dst=req_eth.src, src=self.hw_addr))
-        ack_pkt.add_protocol(ipv4.ipv4(dst=req_ipv4.dst, src=self.dhcp_server, proto=req_ipv4.proto))
-        ack_pkt.add_protocol(udp.udp(src_port=67,dst_port=68))
+        ack_pkt.add_protocol(ethernet.ethernet(
+            ethertype=req_eth.ethertype, dst=req_eth.src, src=self.hw_addr))
+        ack_pkt.add_protocol(
+            ipv4.ipv4(dst=req_ipv4.dst, src=self.dhcp_server, proto=req_ipv4.proto))
+        ack_pkt.add_protocol(udp.udp(src_port=67, dst_port=68))
         ack_pkt.add_protocol(dhcp.dhcp(op=2, chaddr=req_eth.src,
                                        siaddr=self.dhcp_server,
-                                       boot_file=req[0].boot_file,
+                                       boot_file=req.boot_file,
                                        yiaddr=self.ip_addr,
-                                       xid=req[0].xid,
-                                       options=req[0].options))
+                                       xid=req.xid,
+                                       options=req.options))
         self.logger.info("ASSEMBLED ACK: %s" % ack_pkt)
         return ack_pkt
-
 
     def assemble_offer(self, pkt):
         disc_eth = pkt.get_protocol(ethernet.ethernet)
         disc_ipv4 = pkt.get_protocol(ipv4.ipv4)
         disc_udp = pkt.get_protocol(udp.udp)
-        disc = dhcp.dhcp.parser(pkt[3])
-        disc[0].options.option_list.remove(next(opt for opt in disc[0].options.option_list if opt.tag == 55))
-        disc[0].options.option_list.remove(next(opt for opt in disc[0].options.option_list if opt.tag == 53))
-        disc[0].options.option_list.remove(next(opt for opt in disc[0].options.option_list if opt.tag == 12))
-        disc[0].options.option_list.insert(0, dhcp.option(tag=1, value=self.bin_netmask))
-        disc[0].options.option_list.insert(0, dhcp.option(tag=3, value=self.bin_server))
-        disc[0].options.option_list.insert(0, dhcp.option(tag=6, value=self.bin_dns))
-        disc[0].options.option_list.insert(0, dhcp.option(tag=12, value=self.hostname))
-        disc[0].options.option_list.insert(0, dhcp.option(tag=53, value='02'.decode('hex')))
-        disc[0].options.option_list.insert(0, dhcp.option(tag=54, value=self.bin_server))
+        disc = pkt.get_protocol(dhcp.dhcp)
+        disc.options.option_list.remove(
+            next(opt for opt in disc.options.option_list if opt.tag == 55))
+        disc.options.option_list.remove(
+            next(opt for opt in disc.options.option_list if opt.tag == 53))
+        disc.options.option_list.remove(
+            next(opt for opt in disc.options.option_list if opt.tag == 12))
+        disc.options.option_list.insert(
+            0, dhcp.option(tag=1, value=self.bin_netmask))
+        disc.options.option_list.insert(
+            0, dhcp.option(tag=3, value=self.bin_server))
+        disc.options.option_list.insert(
+            0, dhcp.option(tag=6, value=self.bin_dns))
+        disc.options.option_list.insert(
+            0, dhcp.option(tag=12, value=self.hostname))
+        disc.options.option_list.insert(
+            0, dhcp.option(tag=53, value='02'.decode('hex')))
+        disc.options.option_list.insert(
+            0, dhcp.option(tag=54, value=self.bin_server))
 
         offer_pkt = packet.Packet()
-        offer_pkt.add_protocol(ethernet.ethernet(ethertype=disc_eth.ethertype, dst=disc_eth.src, src=self.hw_addr))
-        offer_pkt.add_protocol(ipv4.ipv4(dst=disc_ipv4.dst, src=self.dhcp_server, proto=disc_ipv4.proto))
-        offer_pkt.add_protocol(udp.udp(src_port=67,dst_port=68))
+        offer_pkt.add_protocol(ethernet.ethernet(
+            ethertype=disc_eth.ethertype, dst=disc_eth.src, src=self.hw_addr))
+        offer_pkt.add_protocol(
+            ipv4.ipv4(dst=disc_ipv4.dst, src=self.dhcp_server, proto=disc_ipv4.proto))
+        offer_pkt.add_protocol(udp.udp(src_port=67, dst_port=68))
         offer_pkt.add_protocol(dhcp.dhcp(op=2, chaddr=disc_eth.src,
                                          siaddr=self.dhcp_server,
-                                         boot_file=disc[0].boot_file,
+                                         boot_file=disc.boot_file,
                                          yiaddr=self.ip_addr,
-                                         xid=disc[0].xid,
-                                         options=disc[0].options))
+                                         xid=disc.xid,
+                                         options=disc.options))
         self.logger.info("ASSEMBLED OFFER: %s" % offer_pkt)
         return offer_pkt
 
     def get_state(self, pkt_dhcp):
-        dhcp_state = ord([opt for opt in pkt_dhcp[0].options.option_list if opt.tag == 53][0].value)
+        dhcp_state = ord(
+            [opt for opt in pkt_dhcp.options.option_list if opt.tag == 53][0].value)
         if dhcp_state == 1:
             state = 'DHCPDISCOVER'
         elif dhcp_state == 2:
@@ -140,9 +153,11 @@ class DHCPResponder(app_manager.RyuApp):
         return state
 
     def _handle_dhcp(self, datapath, port, pkt):
-        pkt_dhcp = dhcp.dhcp.parser(pkt[3])
+
+        pkt_dhcp = pkt.get_protocols(dhcp.dhcp)[0]
         dhcp_state = self.get_state(pkt_dhcp)
-        self.logger.info("NEW DHCP %s PACKET RECEIVED: %s" % (dhcp_state, pkt_dhcp))
+        self.logger.info("NEW DHCP %s PACKET RECEIVED: %s" %
+                         (dhcp_state, pkt_dhcp))
         if dhcp_state == 'DHCPDISCOVER':
             self._send_packet(datapath, port, self.assemble_offer(pkt))
         elif dhcp_state == 'DHCPREQUEST':
